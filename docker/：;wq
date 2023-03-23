@@ -1,0 +1,22 @@
+1.docker 网络模式有几种 分别是做什么
+有4种：host模式，container模式, none模式，bridge模式
+
+host模式：跟主机共享网络命名空间
+container模式：跟指定容器共享网络命名空间，但是进程列表和文件系统隔绝
+none模式：关闭网络功能，没有ip网卡，路由
+bridge模式：默认模式，有自己的ip，网卡，路由。通过vethpair连接docker0网桥，docker0网桥跟主机网卡三层互联。所有容器通过docker0网桥二层互联
+
+2.docker 命令有哪些，分别做什么
+
+docker pull
+docker images
+docker run
+docker commit #修改docker镜像
+docker push
+docker cp
+docker exec
+
+3.如何配置docker client登陆远程docker 服务器
+  修改/etc/docker/daemon.json文件，重启docker client
+
+4. 
