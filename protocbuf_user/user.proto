@@ -1,0 +1,18 @@
+syntax = "proto3";
+package user;
+option go_package = "./gen/user";  // 生成的Go代码路径‌:ml-citation{ref="1,3" data="citationList"}
+
+service UserService {
+  rpc Login (LoginRequest) returns (LoginResponse);
+}
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  int32 code = 1;
+  string token = 2;
+}
+
