@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Tetris Game
+Comment=Play Tetris in your terminal
+Exec=go run /path/to/tetris-game/cmd/tetris/main.go
+Icon=/path/to/icon.png
+Terminal=true
+Categories=Game;ActionGame;
