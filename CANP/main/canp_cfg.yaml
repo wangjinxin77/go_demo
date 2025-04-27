@@ -1,0 +1,6 @@
+edge_info:
+  server_port: 39000  # 如果没有该字段，取默认值38000
+  send_publish_period: 30  # 单位为秒，如果没有该字段，取默认值10
+carrier_info:
+  server_ip: 127.0.0.1  # 如果没有该字段,取默认值127.0.0.1
+  server_port: 58000  # 如果没有该字段,取默认值58000

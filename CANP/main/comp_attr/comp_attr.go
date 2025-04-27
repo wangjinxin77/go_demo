@@ -2,6 +2,8 @@ package comp_attr
 
 import (
 	"net"
+
+	"canp.server/common"
 )
 
 // CPU资源结构体
@@ -60,7 +62,7 @@ type NodeInfo struct {
 
 // 示例节点初始化数据
 var DefaultNode = &NodeInfo{
-	NodeID:   1024,
+	NodeID:   common.NodeID,
 	NodeAddr: net.IPv6loopback,
 	CPU: CPUResource{
 		Total:    32,
@@ -71,7 +73,7 @@ var DefaultNode = &NodeInfo{
 		Total:       8,
 		Free:        6,
 		UtilRate:    25.0,
-		MemUtilRate: 24 * 1024, // 24GB
+		MemUtilRate: 24.0,
 	},
 	Storage: StorageResource{
 		TotalStorage: 1000, // 1TB

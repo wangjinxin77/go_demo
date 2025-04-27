@@ -17,6 +17,7 @@ func uint16ToBytes(v uint16) []byte {
 func float32ToBytes(v float32) []byte {
 	buf := make([]byte, 4)
 	binary.BigEndian.PutUint32(buf, math.Float32bits(v))
+	// fmt.Printf("float32转换为字节数组: %f, %v\n", v, buf)
 	return buf
 }
 

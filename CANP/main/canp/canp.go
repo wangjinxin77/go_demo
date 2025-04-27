@@ -5,30 +5,20 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"math"
 	"net"
-	"time"
 
+	"canp.server/common"
 	"canp.server/comp_attr"
-)
-
-// CANP协议常量
-const (
-	CANPHederLen    = 22    // CANP报文头部长度
-	DefaultPort     = 38000 // 天基边缘云监听端口
-	NodeID          = 0x0001
-	NodeAddress     = "2001:db8::1"
-	ResponseTimeout = 3 * time.Second
 )
 
 // CANP报文头部（修正后的24字节结构）
 type CANPHeader struct {
-	Type     uint8    // CANP 报文类型
-	Reserve  uint8    // 保留字段2
-	NodeID   uint16   // 算力节点唯一标识
-	NodeAddr [16]byte // 算力节点IPv6地址
-	TLVsLen  uint16   // CANP Message Value字段, 即TLV总长度, 单位字节
+	Type     uint8  // CANP 报文类型
+	Reserve  uint8  // 保留字段
+	NodeID   uint16 // 算力节点唯一标识
+	NodeAddr net.IP // 算力节点IPv6地址
+	TLVsLen  uint16 // CANP Message Value字段, 即TLV总长度, 单位字节
 }
 
 // TLV结构体
@@ -41,58 +31,26 @@ type TLV struct {
 
 // CANP查询请求结构体
 type QueryRequest struct {
-	Header   CANPHeader
-	TLVTypes []uint8
-	SrcIP    net.IP
-	SrcPort  uint16
-	Reserve1 uint8
-	Reserve2 uint8
+	Header       *CANPHeader
+	TLVTypes     []uint8
+	SrcIP        net.IP
+	SrcPort      uint16
+	PeriodicSend bool
+	Reserve2     uint8
 }
 
 // 创建CANP查询报文（Type=0x02）
-func CreateQueryRequest(srcIP net.IP, srcPort uint16, nodeID uint16, nodeAddr net.IP, tlvTypes []uint8) ([]byte, error) {
-	header := createBaseHeader(0x02, nodeID, nodeAddr)
-
-	// 计算TLV总长度
-	var tlvBytes []byte
-	for _, t := range tlvTypes {
-		tlv := TLV{
-			Type:    t,
-			Reserve: 0x00,
-			Length:  0x00, // 实际长度由SerializeValue计算
-		}
-		tlvBytes = append(tlvBytes, tlv.Type)
-		tlvBytes = append(tlvBytes, tlv.Reserve)
-		// 预留长度字段空间，后续填充
-		tlvBytes = append(tlvBytes, 0x00, 0x00)
-	}
-
-	// 计算TLV总长度并填充
-	var totalLength uint16 = 0
-	for i := 0; i < len(tlvTypes); i++ {
-		tv := tlvTypes[i]
-		var value []byte
-		switch tv {
-		case 0x01: // CPU总核数
-			value = Uint16ToBytes(10)
-			tlvBytes[5+4*i] = uint8(len(value) >> 8)
-			tlvBytes[6+4*i] = uint8(len(value) & 0xFF)
-		// 其他TLV类型处理...
-		default:
-			return nil, fmt.Errorf("unsupported TLV type: %x", tv)
-		}
-		totalLength += uint16(4 + len(value)) // 每个TLV占4字节头+值长度
-	}
-
-	header.TLVsLen = totalLength
+func CreateQueryRequest(nodeID uint16, nodeAddr net.IP, tlvTypes []uint8) ([]byte, error) {
+	header := createBaseHeader(common.CANPTypeQuery, nodeID, nodeAddr)
+	header.TLVsLen = uint16(len(tlvTypes))
 	headerBytes := make([]byte, 22)
 	headerBytes[0] = header.Type
 	headerBytes[1] = header.Reserve
 	binary.BigEndian.PutUint16(headerBytes[2:4], header.NodeID)
-	copy(headerBytes[4:20], header.NodeAddr[:])
+	copy(headerBytes[4:20], header.NodeAddr.To16())
 	binary.BigEndian.PutUint16(headerBytes[20:22], header.TLVsLen)
 
-	return append(headerBytes, tlvBytes...), nil
+	return append(headerBytes, tlvTypes...), nil
 }
 
 func createBaseHeader(canpType uint8, nodeID uint16, nodeAddr net.IP) *CANPHeader {
@@ -100,14 +58,14 @@ func createBaseHeader(canpType uint8, nodeID uint16, nodeAddr net.IP) *CANPHeade
 		Type:     canpType,
 		Reserve:  0x00,
 		NodeID:   nodeID,
-		NodeAddr: To16ByteArray(nodeAddr),
+		NodeAddr: nodeAddr,
 	}
 	return header
 }
 
 // 创建CANP发布报文（Type=0x01）
-func CreatePublishPacket(node *comp_attr.NodeInfo, srcIP net.IP, srcPort uint16) ([]byte, error) {
-	header := createBaseHeader(0x01, node.NodeID, node.NodeAddr)
+func CreatePublishPacket(node *comp_attr.NodeInfo) ([]byte, error) {
+	header := createBaseHeader(common.CANPTypePublish, node.NodeID, node.NodeAddr)
 	// 构造TLV数据
 	tlvs := node.ToTLVs()
 
@@ -122,29 +80,38 @@ func CreatePublishPacket(node *comp_attr.NodeInfo, srcIP net.IP, srcPort uint16)
 		if bytes.Contains(comp_attr.Float32TLVTypes, []uint8{tlv.Type}) {
 			// 处理float32类型的TLV
 			tlvLenSize = 4
+			length := make([]byte, tlvLenSize)
 			// 注意，由于代码里tlv.Length是uint16类型，但发的包定义为uint32, 所以这里需要转换为uint32
-			binary.BigEndian.PutUint32(tlvBytes[len(tlvBytes):len(tlvBytes)+4], uint32(tlv.Length))
+			binary.BigEndian.PutUint32(length, uint32(tlv.Length))
+			tlvBytes = append(tlvBytes, length...)
 		} else {
-			binary.BigEndian.PutUint16(tlvBytes[len(tlvBytes):len(tlvBytes)+2], tlv.Length)
+			length := make([]byte, tlvLenSize)
+			binary.BigEndian.PutUint16(length, tlv.Length)
+			tlvBytes = append(tlvBytes, length...)
 		}
 
 		tlvBytes = append(tlvBytes, tlv.Value...)
 		totalTLVLength += 2 + tlvLenSize + tlv.Length
+		// fmt.Printf("打包发布报文TLV类型: 0x%02x 长度: %d 值: %v, 此时tlv byte长度%d, 值 %v\n", tlv.Type, tlv.Length, tlv.Value, totalTLVLength, tlvBytes)
 	}
 	header.TLVsLen = totalTLVLength
 
-	headerBytes := make([]byte, 24)
+	headerBytes := make([]byte, common.CANPHederLen)
 	headerBytes[0] = header.Type
+	// fmt.Printf("打包发布报文NodeID: 数值: 0x%02x byte值: %v\n", header.Type, headerBytes[0])
 	headerBytes[1] = header.Reserve
 	binary.BigEndian.PutUint16(headerBytes[2:4], header.NodeID)
-	copy(headerBytes[4:20], header.NodeAddr[:])
+	// fmt.Printf("打包发布报文NodeID: 数值: %d byte值: %v\n", header.NodeID, headerBytes[2:4])
+	copy(headerBytes[4:20], header.NodeAddr.To16())
+	// fmt.Printf("打包发布报文NodeAddr: 数值: %v byte值: %v\n", header.NodeAddr, headerBytes[4:20])
 	binary.BigEndian.PutUint16(headerBytes[20:22], header.TLVsLen)
+	// fmt.Printf("打包发布报文TLV字节数: 数值: %d byte值: %v\n", header.TLVsLen, headerBytes[20:22])
 
 	return append(headerBytes, tlvBytes...), nil
 }
 
 func ParseBase(data []byte) (*CANPHeader, []byte, error) {
-	if len(data) <= CANPHederLen {
+	if len(data) <= common.CANPHederLen {
 		return nil, nil, errors.New("invalid CANP header length")
 	}
 
@@ -153,10 +120,10 @@ func ParseBase(data []byte) (*CANPHeader, []byte, error) {
 		Reserve: data[1],
 		NodeID:  binary.BigEndian.Uint16(data[2:4]),
 	}
-	copy(header.NodeAddr[:], data[4:20])
-	header.TLVsLen = binary.BigEndian.Uint16(data[20:CANPHederLen])
+	header.NodeAddr = net.IP(data[4:20])
+	header.TLVsLen = binary.BigEndian.Uint16(data[20:common.CANPHederLen])
 
-	return header, data[CANPHederLen:], nil
+	return header, data[common.CANPHederLen:], nil
 }
 
 // 解析CANP发布报文
@@ -176,19 +143,27 @@ func ParsePublishPacket(data []byte) (*CANPHeader, map[uint8]comp_attr.TLV, erro
 		}
 		tlvType := payload[0]
 		// tlvReserve := payload[1]
-		var tlvLenSize uint16 = 2
+
+		var tlvValueSizeLen uint16 = 2
+		var tlvValueSize uint16
 		if bytes.Contains(comp_attr.Float32TLVTypes, []uint8{tlvType}) {
 			// 处理float32类型的TLV
-			tlvLenSize = 4
+			tlvValueSizeLen = 4
+			tlvValueSize = uint16(binary.BigEndian.Uint32(payload[2 : 2+tlvValueSizeLen]))
+		} else {
+			tlvValueSize = binary.BigEndian.Uint16(payload[2 : 2+tlvValueSizeLen])
 		}
-		tlvLen := binary.BigEndian.Uint16(payload[2 : 2+tlvLenSize])
-		tlvs[tlvType] = comp_attr.TLV{
+		// fmt.Printf("解析发布报文TLV类型: 0x%02x 长度: %d 值: %v\n", tlvType, tlvValueSize, payload[2+tlvValueSizeLen:2+tlvValueSizeLen+tlvValueSize])
+
+		tlv := comp_attr.TLV{
 			Type:    tlvType,
 			Reserve: 0x00,
-			Length:  tlvLen,
-			Value:   payload[2+tlvLenSize : 2+tlvLenSize+tlvLen],
+			Length:  tlvValueSize,
 		}
-		payload = payload[2+tlvLenSize+tlvLen:]
+		tlv.Value = append(tlv.Value, payload[2+tlvValueSizeLen:2+tlvValueSizeLen+tlvValueSize]...)
+		tlvs[tlvType] = tlv
+
+		payload = payload[2+tlvValueSizeLen+tlvValueSize:]
 	}
 
 	return header, tlvs, nil
@@ -199,9 +174,6 @@ func ParseQueryPacket(data []byte) (*CANPHeader, map[uint8]uint8, error) {
 	header, payload, err := ParseBase(data)
 	if err != nil {
 		return nil, nil, err
-	}
-	if len(payload) < 4 {
-		return nil, nil, errors.New("invalid payload length")
 	}
 	// 解析查询的TLV类型
 	tlvs := make(map[uint8]uint8)
@@ -225,11 +197,4 @@ func Float32ToBytes(v float32) []byte {
 	buf := make([]byte, 4)
 	binary.BigEndian.PutUint32(buf, math.Float32bits(v))
 	return buf
-}
-
-// IPv6地址转换辅助函数
-func To16ByteArray(ip net.IP) [16]byte {
-	var addr [16]byte
-	copy(addr[:], ip.To16())
-	return addr
 }
